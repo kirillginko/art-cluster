@@ -1,32 +1,111 @@
 "use client";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Loader2 } from "lucide-react";
 import styles from "../styles/gallery.module.css";
-import Image from "next/image";
+import { Canvas, useFrame } from "@react-three/fiber";
+import { OrbitControls, Text } from "@react-three/drei";
+import * as THREE from "three";
+
+const ArtworkImage = ({ artwork, position }) => {
+  const [texture, setTexture] = useState(null);
+  const [error, setError] = useState(false);
+  const meshRef = useRef();
+
+  useEffect(() => {
+    console.log(
+      `Loading texture for artwork ${artwork.id}:`,
+      artwork.localImagePath
+    );
+    const loader = new THREE.TextureLoader();
+    loader.load(
+      artwork.localImagePath,
+      (loadedTexture) => {
+        console.log(`Successfully loaded texture for artwork ${artwork.id}`);
+        setTexture(loadedTexture);
+      },
+      undefined,
+      (err) => {
+        console.error(`Error loading texture for ${artwork.id}:`, err);
+        setError(true);
+      }
+    );
+
+    return () => {
+      if (texture) {
+        texture.dispose();
+      }
+    };
+  }, [artwork.localImagePath, artwork.id]);
+
+  useEffect(() => {
+    if (meshRef.current) {
+      if (error) {
+        const hue = Math.random() * 360;
+        const color = new THREE.Color(`hsl(${hue}, 70%, 80%)`);
+        meshRef.current.material.color = color;
+      } else if (texture) {
+        meshRef.current.material.map = texture;
+        meshRef.current.material.needsUpdate = true;
+      }
+    }
+  }, [texture, error]);
+
+  return (
+    <mesh ref={meshRef} position={position}>
+      <planeGeometry args={[2, 2]} />
+      <meshBasicMaterial
+        color={error ? "gray" : "white"}
+        side={THREE.DoubleSide}
+      />
+      <Text
+        position={[0, -1.2, 0]}
+        fontSize={0.2}
+        color="black"
+        anchorX="center"
+        anchorY="top"
+      >
+        {artwork.title}
+      </Text>
+    </mesh>
+  );
+};
+
+const ArtworkCluster = ({ artworks }) => {
+  const group = useRef();
+
+  // useFrame((state) => {
+  //   group.current.rotation.y += 0.001;
+  // });
+
+  return (
+    <group ref={group}>
+      {artworks.map((artwork) => {
+        const position = new THREE.Vector3(
+          Math.random() * 10 - 5,
+          Math.random() * 10 - 5,
+          Math.random() * 10 - 5
+        );
+        return (
+          <ArtworkImage
+            key={artwork.id}
+            artwork={artwork}
+            position={position}
+          />
+        );
+      })}
+    </group>
+  );
+};
 
 const HarvardGallery = () => {
   const [artworks, setArtworks] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
-  const [imageLoading, setImageLoading] = useState({});
-  const [windowWidth, setWindowWidth] = useState(
-    typeof window !== "undefined" ? window.innerWidth : 1024
-  );
-
-  useEffect(() => {
-    const handleResize = () => {
-      setWindowWidth(window.innerWidth);
-    };
-
-    window.addEventListener("resize", handleResize);
-    return () => window.removeEventListener("resize", handleResize);
-  }, []);
 
   const fetchArtworks = async () => {
     try {
       setLoading(true);
       setError(null);
-      setImageLoading({});
       console.log("Fetching artworks...");
 
       const apiKey = process.env.NEXT_PUBLIC_HARVARD_API_KEY;
@@ -40,20 +119,9 @@ const HarvardGallery = () => {
       const queryParams = new URLSearchParams({
         apikey: apiKey,
         hasimage: 1,
-        size: 100, // Request more images
+        size: 20,
         sort: "random",
-        fields: [
-          "id",
-          "title",
-          "primaryimageurl",
-          "people",
-          "dated",
-          "period",
-          "style",
-          "classification",
-          "century",
-        ].join(","),
-        timestamp: Date.now(),
+        fields: "id,title,primaryimageurl",
       });
 
       const response = await fetch(
@@ -65,21 +133,27 @@ const HarvardGallery = () => {
       }
 
       const data = await response.json();
-      const filteredArtworks = data.records
-        .filter((art) => art.primaryimageurl)
-        .slice(0, 32); // Display 32 images instead of 16
+      console.log("API response:", data);
 
-      if (filteredArtworks.length === 0) {
-        throw new Error("No artworks found with images");
-      }
+      const filteredArtworks = data.records.filter(
+        (art) => art.primaryimageurl
+      );
+      console.log("Filtered artworks:", filteredArtworks);
 
-      const newImageLoading = {};
-      filteredArtworks.forEach((art) => {
-        newImageLoading[art.id] = true;
-      });
-      setImageLoading(newImageLoading);
+      // Save images and update artwork data
+      const savedArtworks = await Promise.all(
+        filteredArtworks.map(async (artwork) => {
+          const saveResponse = await fetch(
+            `/api/saveArtworkImage?url=${encodeURIComponent(
+              artwork.primaryimageurl
+            )}&id=${artwork.id}`
+          );
+          const saveData = await saveResponse.json();
+          return { ...artwork, localImagePath: saveData.path };
+        })
+      );
 
-      setArtworks(filteredArtworks);
+      setArtworks(savedArtworks);
       setLoading(false);
     } catch (error) {
       console.error("Error fetching artworks:", error);
@@ -92,46 +166,8 @@ const HarvardGallery = () => {
     fetchArtworks();
   }, []);
 
-  const getArtistInfo = (people) => {
-    if (!people || people.length === 0) return "Unknown Artist";
-
-    const artists = people.filter((person) => person.role === "Artist");
-
-    if (artists.length === 0) {
-      const primaryCreator = people[0];
-      return (
-        primaryCreator.displayname || primaryCreator.name || "Unknown Artist"
-      );
-    }
-
-    if (artists.length === 1) {
-      return artists[0].displayname || artists[0].name;
-    }
-
-    return `${artists[0].displayname} and others`;
-  };
-
-  const getArtistDetails = (person) => {
-    if (!person) return null;
-
-    const culture = person.culture ? `${person.culture}` : "";
-    const dates = person.displaydate ? ` (${person.displaydate})` : "";
-
-    return culture + dates;
-  };
-
   if (error) {
-    return (
-      <div className={styles.gallery_container}>
-        <div className={styles.error_container}>
-          <h2 className={styles.error_title}>Error Loading Gallery</h2>
-          <p className={styles.error_message}>{error}</p>
-          <button onClick={fetchArtworks} className={styles.load_button}>
-            Try Again
-          </button>
-        </div>
-      </div>
-    );
+    return <div className={styles.error_container}>{error}</div>;
   }
 
   return (
@@ -158,79 +194,13 @@ const HarvardGallery = () => {
           <Loader2 className={`${styles.loading_spinner} ${styles.spinner}`} />
         </div>
       ) : (
-        <div className={styles.gallery_grid}>
-          {artworks.map((artwork, index) => {
-            const artistName = getArtistInfo(artwork.people);
-            const artistDetails = artwork.people?.[0]
-              ? getArtistDetails(artwork.people[0])
-              : null;
-
-            // Determine if this image should be prioritized based on viewport width
-            const isPriority = index === 0 || (windowWidth >= 768 && index < 4);
-
-            return (
-              <div key={artwork.id} className={styles.artwork_card}>
-                <div className={styles.image_wrapper}>
-                  {imageLoading[artwork.id] && (
-                    <div className={styles.image_loading}>
-                      <Loader2
-                        className={`${styles.loading_spinner} ${styles.spinner}`}
-                      />
-                    </div>
-                  )}
-                  <Image
-                    src={artwork.primaryimageurl}
-                    alt={artwork.title || "Artwork"}
-                    className={`${styles.artwork_image} ${
-                      !imageLoading[artwork.id] ? styles.image_loaded : ""
-                    }`}
-                    fill={true}
-                    sizes="(max-width: 640px) 100vw, (max-width: 768px) 50vw, (max-width: 1024px) 33vw, 25vw"
-                    style={{ objectFit: "contain" }}
-                    onLoad={() => {
-                      setImageLoading((prev) => ({
-                        ...prev,
-                        [artwork.id]: false,
-                      }));
-                    }}
-                    onError={() => {
-                      setImageLoading((prev) => ({
-                        ...prev,
-                        [artwork.id]: false,
-                      }));
-                    }}
-                    priority={isPriority}
-                    loading={isPriority ? "eager" : "lazy"}
-                    quality={85}
-                  />
-                </div>
-                <div className={styles.artwork_info}>
-                  <h2 className={styles.artwork_title} title={artwork.title}>
-                    {artwork.title}
-                  </h2>
-                  <p className={styles.artwork_artist} title={artistName}>
-                    {artistName}
-                  </p>
-                  {artistDetails && (
-                    <p className={styles.artwork_details}>{artistDetails}</p>
-                  )}
-                  <div className={styles.artwork_meta}>
-                    {artwork.dated && (
-                      <p className={styles.artwork_date}>{artwork.dated}</p>
-                    )}
-                    {artwork.period && (
-                      <p className={styles.artwork_period}>{artwork.period}</p>
-                    )}
-                    {artwork.century && (
-                      <p className={styles.artwork_century}>
-                        {artwork.century}
-                      </p>
-                    )}
-                  </div>
-                </div>
-              </div>
-            );
-          })}
+        <div className={styles.canvas_container}>
+          <Canvas camera={{ position: [0, 0, 15], fov: 60 }}>
+            <ambientLight intensity={0.5} />
+            <pointLight position={[10, 10, 10]} />
+            <ArtworkCluster artworks={artworks} />
+            <OrbitControls />
+          </Canvas>
         </div>
       )}
     </div>
