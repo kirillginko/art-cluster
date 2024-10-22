@@ -40,7 +40,7 @@ const HarvardGallery = () => {
       const queryParams = new URLSearchParams({
         apikey: apiKey,
         hasimage: 1,
-        size: 30,
+        size: 100, // Request more images
         sort: "random",
         fields: [
           "id",
@@ -67,7 +67,7 @@ const HarvardGallery = () => {
       const data = await response.json();
       const filteredArtworks = data.records
         .filter((art) => art.primaryimageurl)
-        .slice(0, 16);
+        .slice(0, 32); // Display 32 images instead of 16
 
       if (filteredArtworks.length === 0) {
         throw new Error("No artworks found with images");
