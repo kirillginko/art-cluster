@@ -6,11 +6,29 @@ import { Canvas, useFrame, useLoader, useThree } from "@react-three/fiber";
 import { OrbitControls, Text } from "@react-three/drei";
 import * as THREE from "three";
 import { TextureLoader } from "three";
+import { useDrag } from "@use-gesture/react";
 
 const ArtworkImage = ({ artwork, position }) => {
   const [error, setError] = useState(artwork.imageLoadError || null);
   const meshRef = useRef();
-  const { scene } = useThree();
+  const { scene, camera } = useThree();
+  const [pos, setPos] = useState(position);
+
+  const bind = useDrag(
+    ({ delta: [x, y] }) => {
+      setPos((prev) => {
+        const [prevX, prevY, prevZ] = prev;
+        return [prevX + x / 50, prevY - y / 50, prevZ];
+      });
+    },
+    { pointerEvents: true }
+  );
+
+  useFrame(() => {
+    if (meshRef.current) {
+      meshRef.current.lookAt(camera.position);
+    }
+  });
 
   useEffect(() => {
     if (artwork.imageLoadError) {
@@ -77,8 +95,8 @@ const ArtworkImage = ({ artwork, position }) => {
   const yearPosition = artistPosition - artistFontSize - 0.05;
 
   return (
-    <group position={position}>
-      <mesh ref={meshRef}>
+    <group position={pos}>
+      <mesh ref={meshRef} {...bind()}>
         <planeGeometry args={[2, 2]} />
         <meshBasicMaterial
           color={error ? "gray" : "white"}
@@ -122,18 +140,19 @@ const ArtworkImage = ({ artwork, position }) => {
 const ArtworkCluster = ({ artworks }) => {
   const group = useRef();
 
-  // useFrame((state) => {
-  //   group.current.rotation.y += 0.001;
-  // });
-
   return (
     <group ref={group}>
-      {artworks.map((artwork) => {
+      {artworks.map((artwork, index) => {
+        const radius = 15; // Increased radius for more spread
+        const phi = Math.acos(-1 + (2 * index) / artworks.length);
+        const theta = Math.sqrt(artworks.length * Math.PI) * phi;
+
         const position = new THREE.Vector3(
-          Math.random() * 10 - 5,
-          Math.random() * 10 - 5,
-          Math.random() * 10 - 5
+          radius * Math.cos(theta) * Math.sin(phi),
+          radius * Math.sin(theta) * Math.sin(phi),
+          radius * Math.cos(phi)
         );
+
         return (
           <ArtworkImage
             key={artwork.id}
@@ -268,13 +287,21 @@ const HarvardGallery = () => {
         </div>
       ) : (
         <div className={styles.canvas_container}>
-          <Canvas camera={{ position: [0, 0, 15], fov: 60 }}>
+          <Canvas camera={{ position: [0, 0, 30], fov: 60 }}>
             <ambientLight intensity={0.5} />
             <pointLight position={[10, 10, 10]} />
             <Suspense fallback={null}>
               <ArtworkCluster artworks={artworks} />
             </Suspense>
-            <OrbitControls />
+            <OrbitControls
+              makeDefault
+              enableRotate={false}
+              enablePan={false}
+              enableZoom={true}
+              rotateSpeed={0.5}
+              minPolarAngle={Math.PI / 2}
+              maxPolarAngle={Math.PI / 2}
+            />
           </Canvas>
         </div>
       )}
