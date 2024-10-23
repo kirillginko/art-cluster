@@ -20,5 +20,5 @@ export default function handler(req, res) {
   console.log(`Image found for ID ${id}, sending response`);
   res.setHeader("Content-Type", "image/jpeg");
   res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
-  res.send(imageData);
+  res.send(imageData.buffer);
 }

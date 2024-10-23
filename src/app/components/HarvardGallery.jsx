@@ -8,35 +8,47 @@ import * as THREE from "three";
 import { TextureLoader } from "three";
 
 const ArtworkImage = ({ artwork, position }) => {
-  const [error, setError] = useState(null);
+  const [error, setError] = useState(artwork.imageLoadError || null);
   const meshRef = useRef();
   const { scene } = useThree();
 
   useEffect(() => {
+    if (artwork.imageLoadError) {
+      setError(new Error("Image failed to load"));
+      return;
+    }
+
     const loader = new THREE.TextureLoader();
     loader.crossOrigin = "anonymous";
 
-    loader.load(
-      `/api/getImage?id=${artwork.id}`,
-      (texture) => {
-        if (meshRef.current) {
-          meshRef.current.material.map = texture;
-          meshRef.current.material.needsUpdate = true;
+    if (artwork.dataURI) {
+      loader.load(
+        artwork.dataURI,
+        (texture) => {
+          if (meshRef.current) {
+            meshRef.current.material.map = texture;
+            meshRef.current.material.needsUpdate = true;
+          }
+        },
+        undefined,
+        (err) => {
+          console.error(
+            `Error loading texture for artwork ${artwork.id}:`,
+            err
+          );
+          setError(err);
         }
-      },
-      undefined,
-      (err) => {
-        console.error(`Error loading texture for artwork ${artwork.id}:`, err);
-        setError(err);
-      }
-    );
+      );
+    } else {
+      setError(new Error("No dataURI available"));
+    }
 
     return () => {
       if (meshRef.current && meshRef.current.material.map) {
         meshRef.current.material.map.dispose();
       }
     };
-  }, [artwork.id]);
+  }, [artwork.id, artwork.dataURI, artwork.imageLoadError]);
 
   useEffect(() => {
     if (meshRef.current && error) {
@@ -177,31 +189,44 @@ const HarvardGallery = () => {
       );
       console.log("Filtered artworks:", filteredArtworks);
 
-      const savedArtworks = await Promise.all(
-        filteredArtworks.map(async (artwork) => {
-          try {
-            const saveResponse = await fetch(
-              `/api/saveArtworkImage?url=${encodeURIComponent(
-                artwork.primaryimageurl
-              )}&id=${artwork.id}`
-            );
-            if (!saveResponse.ok) {
-              const errorData = await saveResponse.json();
-              throw new Error(`Failed to save image: ${errorData.error}`);
-            }
-            const saveData = await saveResponse.json();
-            console.log(`Saved artwork ${artwork.id}:`, saveData);
-            return { ...artwork, id: saveData.id };
-          } catch (error) {
-            console.error(`Error saving artwork ${artwork.id}:`, error);
-            return null;
-          }
-        })
-      );
+      // Process artworks in batches
+      const batchSize = 5;
+      const batches = Math.ceil(filteredArtworks.length / batchSize);
 
-      const validArtworks = savedArtworks.filter((artwork) => artwork !== null);
-      console.log("Valid artworks:", validArtworks);
-      setArtworks(validArtworks);
+      for (let i = 0; i < batches; i++) {
+        const batch = filteredArtworks.slice(
+          i * batchSize,
+          (i + 1) * batchSize
+        );
+        const savedArtworksBatch = await Promise.all(
+          batch.map(async (artwork) => {
+            try {
+              const saveResponse = await fetch(
+                `/api/saveArtworkImage?url=${encodeURIComponent(
+                  artwork.primaryimageurl
+                )}&id=${artwork.id}`
+              );
+              const saveData = await saveResponse.json();
+
+              if (!saveResponse.ok) {
+                console.warn(
+                  `Failed to save image for artwork ${artwork.id}: ${saveData.error}`
+                );
+                return { ...artwork, id: artwork.id, imageLoadError: true };
+              }
+
+              console.log(`Saved artwork ${artwork.id}:`, saveData);
+              return { ...artwork, id: saveData.id, dataURI: saveData.dataURI };
+            } catch (error) {
+              console.error(`Error saving artwork ${artwork.id}:`, error);
+              return { ...artwork, id: artwork.id, imageLoadError: true };
+            }
+          })
+        );
+
+        setArtworks((prevArtworks) => [...prevArtworks, ...savedArtworksBatch]);
+      }
+
       setLoading(false);
     } catch (error) {
       console.error("Error fetching artworks:", error);
