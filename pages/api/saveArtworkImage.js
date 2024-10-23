@@ -1,6 +1,6 @@
-import fs from "fs";
-import path from "path";
 import axios from "axios";
+
+const imageCache = new Map();
 
 export default async function handler(req, res) {
   const { url, id } = req.query;
@@ -10,22 +10,21 @@ export default async function handler(req, res) {
   }
 
   try {
-    const response = await axios.get(url, { responseType: "arraybuffer" });
+    console.log(`Fetching image from URL: ${url}`);
+    const response = await axios.get(url, {
+      responseType: "arraybuffer",
+      timeout: 10000,
+    });
+
     const buffer = Buffer.from(response.data, "binary");
+    imageCache.set(id, buffer);
+    console.log(`Image stored in cache with ID: ${id}`);
 
-    const publicDir = path.join(process.cwd(), "public");
-    const artworksDir = path.join(publicDir, "artworks");
-
-    if (!fs.existsSync(artworksDir)) {
-      fs.mkdirSync(artworksDir, { recursive: true });
-    }
-
-    const filePath = path.join(artworksDir, `${id}.jpg`);
-    fs.writeFileSync(filePath, buffer);
-
-    res.status(200).json({ success: true, path: `/artworks/${id}.jpg` });
+    res.status(200).json({ success: true, id });
   } catch (error) {
     console.error("Error saving image:", error);
-    res.status(500).json({ error: "Failed to save image" });
+    res.status(500).json({ error: error.message });
   }
 }
+
+export { imageCache };

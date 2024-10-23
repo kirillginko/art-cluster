@@ -1,72 +1,109 @@
 "use client";
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, Suspense } from "react";
 import { Loader2 } from "lucide-react";
 import styles from "../styles/gallery.module.css";
-import { Canvas, useFrame } from "@react-three/fiber";
+import { Canvas, useFrame, useLoader, useThree } from "@react-three/fiber";
 import { OrbitControls, Text } from "@react-three/drei";
 import * as THREE from "three";
+import { TextureLoader } from "three";
 
 const ArtworkImage = ({ artwork, position }) => {
-  const [texture, setTexture] = useState(null);
-  const [error, setError] = useState(false);
+  const [error, setError] = useState(null);
   const meshRef = useRef();
+  const { scene } = useThree();
 
   useEffect(() => {
-    console.log(
-      `Loading texture for artwork ${artwork.id}:`,
-      artwork.localImagePath
-    );
     const loader = new THREE.TextureLoader();
+    loader.crossOrigin = "anonymous";
+
     loader.load(
-      artwork.localImagePath,
-      (loadedTexture) => {
-        console.log(`Successfully loaded texture for artwork ${artwork.id}`);
-        setTexture(loadedTexture);
+      `/api/getImage?id=${artwork.id}`,
+      (texture) => {
+        if (meshRef.current) {
+          meshRef.current.material.map = texture;
+          meshRef.current.material.needsUpdate = true;
+        }
       },
       undefined,
       (err) => {
-        console.error(`Error loading texture for ${artwork.id}:`, err);
-        setError(true);
+        console.error(`Error loading texture for artwork ${artwork.id}:`, err);
+        setError(err);
       }
     );
 
     return () => {
-      if (texture) {
-        texture.dispose();
+      if (meshRef.current && meshRef.current.material.map) {
+        meshRef.current.material.map.dispose();
       }
     };
-  }, [artwork.localImagePath, artwork.id]);
+  }, [artwork.id]);
 
   useEffect(() => {
-    if (meshRef.current) {
-      if (error) {
-        const hue = Math.random() * 360;
-        const color = new THREE.Color(`hsl(${hue}, 70%, 80%)`);
-        meshRef.current.material.color = color;
-      } else if (texture) {
-        meshRef.current.material.map = texture;
-        meshRef.current.material.needsUpdate = true;
-      }
+    if (meshRef.current && error) {
+      const hue = Math.random() * 360;
+      const color = new THREE.Color(`hsl(${hue}, 70%, 80%)`);
+      meshRef.current.material.color = color;
     }
-  }, [texture, error]);
+  }, [error]);
+
+  const artistName = artwork.people
+    ? artwork.people[0]?.name
+    : "Unknown Artist";
+  const year = artwork.dated || "Unknown Year";
+
+  const truncate = (str, maxLength) => {
+    if (str.length <= maxLength) return str;
+    return str.slice(0, maxLength - 3) + "...";
+  };
+
+  const titleFontSize = Math.max(0.1, Math.min(0.15, 2 / artwork.title.length));
+  const artistFontSize = Math.max(0.08, Math.min(0.12, 2 / artistName.length));
+  const yearFontSize = 0.08;
+
+  const titlePosition = -1.1;
+  const artistPosition = titlePosition - titleFontSize - 0.05;
+  const yearPosition = artistPosition - artistFontSize - 0.05;
 
   return (
-    <mesh ref={meshRef} position={position}>
-      <planeGeometry args={[2, 2]} />
-      <meshBasicMaterial
-        color={error ? "gray" : "white"}
-        side={THREE.DoubleSide}
-      />
+    <group position={position}>
+      <mesh ref={meshRef}>
+        <planeGeometry args={[2, 2]} />
+        <meshBasicMaterial
+          color={error ? "gray" : "white"}
+          side={THREE.DoubleSide}
+        />
+      </mesh>
       <Text
-        position={[0, -1.2, 0]}
-        fontSize={0.2}
+        position={[0, titlePosition, 0]}
+        fontSize={titleFontSize}
         color="black"
         anchorX="center"
         anchorY="top"
+        maxWidth={2}
       >
-        {artwork.title}
+        {truncate(artwork.title, 50)}
       </Text>
-    </mesh>
+      <Text
+        position={[0, artistPosition, 0]}
+        fontSize={artistFontSize}
+        color="black"
+        anchorX="center"
+        anchorY="top"
+        maxWidth={2}
+      >
+        {truncate(artistName, 30)}
+      </Text>
+      <Text
+        position={[0, yearPosition, 0]}
+        fontSize={yearFontSize}
+        color="black"
+        anchorX="center"
+        anchorY="top"
+        maxWidth={2}
+      >
+        {year}
+      </Text>
+    </group>
   );
 };
 
@@ -121,7 +158,7 @@ const HarvardGallery = () => {
         hasimage: 1,
         size: 20,
         sort: "random",
-        fields: "id,title,primaryimageurl",
+        fields: "id,title,primaryimageurl,people,dated",
       });
 
       const response = await fetch(
@@ -140,20 +177,31 @@ const HarvardGallery = () => {
       );
       console.log("Filtered artworks:", filteredArtworks);
 
-      // Save images and update artwork data
       const savedArtworks = await Promise.all(
         filteredArtworks.map(async (artwork) => {
-          const saveResponse = await fetch(
-            `/api/saveArtworkImage?url=${encodeURIComponent(
-              artwork.primaryimageurl
-            )}&id=${artwork.id}`
-          );
-          const saveData = await saveResponse.json();
-          return { ...artwork, localImagePath: saveData.path };
+          try {
+            const saveResponse = await fetch(
+              `/api/saveArtworkImage?url=${encodeURIComponent(
+                artwork.primaryimageurl
+              )}&id=${artwork.id}`
+            );
+            if (!saveResponse.ok) {
+              const errorData = await saveResponse.json();
+              throw new Error(`Failed to save image: ${errorData.error}`);
+            }
+            const saveData = await saveResponse.json();
+            console.log(`Saved artwork ${artwork.id}:`, saveData);
+            return { ...artwork, id: saveData.id };
+          } catch (error) {
+            console.error(`Error saving artwork ${artwork.id}:`, error);
+            return null;
+          }
         })
       );
 
-      setArtworks(savedArtworks);
+      const validArtworks = savedArtworks.filter((artwork) => artwork !== null);
+      console.log("Valid artworks:", validArtworks);
+      setArtworks(validArtworks);
       setLoading(false);
     } catch (error) {
       console.error("Error fetching artworks:", error);
@@ -198,7 +246,9 @@ const HarvardGallery = () => {
           <Canvas camera={{ position: [0, 0, 15], fov: 60 }}>
             <ambientLight intensity={0.5} />
             <pointLight position={[10, 10, 10]} />
-            <ArtworkCluster artworks={artworks} />
+            <Suspense fallback={null}>
+              <ArtworkCluster artworks={artworks} />
+            </Suspense>
             <OrbitControls />
           </Canvas>
         </div>
